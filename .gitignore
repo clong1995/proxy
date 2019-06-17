@@ -1,0 +1,14 @@
+.idea/
+/test
+# less
+*.less
+*.css.map
+*.scss
+.project
+.webinfo
+.config
+/dbs
+/logs
+/package-lock.json
+/node_modules
+/files
