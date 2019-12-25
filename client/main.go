@@ -10,19 +10,17 @@ import (
 	"time"
 )
 
+func init() {
+	log.SetFlags(log.Llongfile)
+}
+
 func main() {
-
-	clientAddr := flag.String("client", "", "client address,like 127.0.0.1:8080")
-	serverAddr := flag.String("server", "", "server address,like 123.123.123.123:18080")
+	clientAddr := flag.String("client", ":80", "client address,like :80")
+	serverAddr := flag.String("server", "quickex.com.cn:20080", "server address,like quickex.com.cn:20080")
 	flag.Parse()
-
 	if *clientAddr == "" || *serverAddr == "" {
 		log.Fatalln("Parameters of the abnormal")
 	}
-
-	/*log.SetFlags(log.Ldate | log.Llongfile)
-	clientAddr, serverAddr := "127.0.0.1:8009", "192.168.20.163:46687"*/
-
 	d := common.NewDelayer()
 	for {
 		err := dialRelay(*clientAddr, *serverAddr)
@@ -31,7 +29,7 @@ func main() {
 }
 
 func dialRelay(clientAddr, serverAddr string) error {
-	//发起连接
+	//发起连接到远程服务
 	serverTcpAddr, err := net.ResolveTCPAddr("tcp", serverAddr)
 	if err != nil {
 		log.Println(err)
@@ -46,19 +44,19 @@ func dialRelay(clientAddr, serverAddr string) error {
 	var buf [64]byte
 
 	for {
+		//设置超时
 		_ = serverConn.SetReadDeadline(time.Now().Add(90 * time.Second))
-		//收到消息后，就解除了超时错误的模式
+		//阻塞等待读取消息，取出前四位
 		_, err = io.ReadFull(serverConn, buf[:4])
 		if err != nil {
 			log.Println(err)
 			_ = serverConn.Close()
 			return err
 		}
-		_ = serverConn.SetReadDeadline(time.Time{}) //恢复为阻塞模式。
+		//收到消息后，就解除了超时错误的模式，
+		_ = serverConn.SetReadDeadline(time.Time{}) //解除超时，进入再次循环的阻塞模式（io.ReadFull）
 
-		//log.Println("===>",string(buf[:4]))
-
-		if bytes.Equal(buf[:4], []byte("PING")) { //收到平
+		if bytes.Equal(buf[:4], []byte("PING")) { //收到ping
 			_, err = serverConn.Write([]byte("PONG")) //发送pang
 			if err != nil {
 				log.Println(err)
@@ -89,6 +87,8 @@ func acceptConn(serverConn *net.TCPConn, clientAddr string) {
 		return
 	}
 
+	//publicAddr 大众的ip和端口，目前没啥用，不过可以做ip端口限制
+
 	_, err = serverConn.Write([]byte("ACPT"))
 	if err != nil {
 		_ = serverConn.Close()
@@ -111,13 +111,7 @@ func acceptConn(serverConn *net.TCPConn, clientAddr string) {
 	}
 
 	//从远端发到本地
-	go copyTCPConn(clientConn, serverConn)
+	go common.CopyTCPConn(clientConn, serverConn)
 	//从本机返回远端
-	go copyTCPConn(serverConn, clientConn)
-}
-
-func copyTCPConn(dst, src *net.TCPConn) {
-	_, _ = io.Copy(dst, src)
-	_ = src.CloseRead()
-	_ = dst.CloseWrite()
+	go common.CopyTCPConn(serverConn, clientConn)
 }

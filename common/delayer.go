@@ -34,8 +34,10 @@ func (d *delayer) reset() *delayer {
 
 func (d *delayer) sleep() *delayer {
 	if d.a >= 3*time.Minute {
+		//累计睡了3分钟后，不再累计，下次还是睡3分钟
 		time.Sleep(3 * time.Minute)
 	} else {
+		//不到3分钟，每次累加1秒
 		time.Sleep(d.a)
 		d.a, d.b = d.b, d.a+d.b
 	}
