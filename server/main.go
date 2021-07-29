@@ -2,11 +2,11 @@ package main
 
 import (
 	"bytes"
-	"ferry/common"
 	"flag"
 	"io"
 	"log"
 	"net"
+	"proxy/common"
 	"time"
 )
 
@@ -16,9 +16,9 @@ func init() {
 
 func main() {
 	//对大众的端口
-	publicAddr := flag.String("public", ":10080", "public address,like :10080")
+	publicAddr := flag.String("public", ":202", "public address,like :201")
 	//内应需要链接的端口
-	serverAddr := flag.String("server", ":20080", "server address,like :20080")
+	serverAddr := flag.String("server", ":201", "server address,like :202")
 	flag.Parse()
 
 	if *publicAddr == "" || *serverAddr == "" {
@@ -26,21 +26,21 @@ func main() {
 	}
 
 	//创建对内应的监听
-	serverTcpAddr, err := net.ResolveTCPAddr("tcp", *serverAddr)
+	serverTCPAddr, err := net.ResolveTCPAddr("tcp", *serverAddr)
 	if err != nil {
 		log.Fatalln(err)
 	}
-	serverListener, err := net.ListenTCP("tcp", serverTcpAddr)
+	serverTCPListener, err := net.ListenTCP("tcp", serverTCPAddr)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
 	//创建对大众的监听
-	publicTcpAddr, err := net.ResolveTCPAddr("tcp", *publicAddr)
+	publicTCPAddr, err := net.ResolveTCPAddr("tcp", *publicAddr)
 	if err != nil {
 		log.Fatalln(err)
 	}
-	publicListener, err := net.ListenTCP("tcp", publicTcpAddr)
+	publicTCPListener, err := net.ListenTCP("tcp", publicTCPAddr)
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -48,16 +48,16 @@ func main() {
 	//给大众的保存链接的通道
 	publicConnChan := make(chan *net.TCPConn)
 	//开辟协程等待响应大众发送消息
-	go acceptConn(publicListener, publicConnChan) //写通道
+	go acceptConn(publicTCPListener, publicConnChan) //写通道
 
 	//自增延时器
 	d := common.NewDelayer()
 	for {
 		//监听对内服务
-		serverConn, err := serverListener.AcceptTCP() //这里阻塞，等待内应激活（内应联入发送消息）
-		if !d.ProcError(err) {
+		serverTCPConn, acceptErr := serverTCPListener.AcceptTCP() //这里阻塞，等待内应激活（内应联入发送消息）
+		if !d.ProcError(acceptErr) {
 			//消费大众的消息
-			go authConn(serverConn, publicConnChan) //读通道
+			go authConn(serverTCPConn, publicConnChan) //读通道
 		}
 	}
 }
@@ -78,18 +78,18 @@ func acceptConn(publicListener *net.TCPListener, publicConnChan chan *net.TCPCon
 
 //消费public链接的消息
 func authConn(serverConn *net.TCPConn, publicConnChan chan *net.TCPConn) {
-	var buf [64]byte
+	//TODO 这里可以作为人工干预的负载均衡，不知道golang的多消费模式能不能自动均衡
+	var buf [4]byte
 	for {
 		select {
 		//取出链接
 		case publicConn := <-publicConnChan:
 			//大众的ip:port
 			publicAddr := publicConn.RemoteAddr().String()
-			buf := []byte{'C', 'O', 'N', 'N', uint8(len(publicAddr) >> 8), uint8(len(publicAddr))}
-			buf = append(buf, publicAddr...) //例如CONN09127.0.0.1
+			connBuf := []byte{'C', 'O', 'N', 'N', uint8(len(publicAddr) >> 8), uint8(len(publicAddr))}
+			connBuf = append(connBuf, publicAddr...) //例如CONN09127.0.0.1
 			//写到对内应
-			_, err := serverConn.Write(buf)
-			if err != nil {
+			if _, err := serverConn.Write(connBuf); err != nil {
 				log.Println(err)
 				_ = serverConn.Close()
 				//重新放回到通道里
@@ -99,8 +99,7 @@ func authConn(serverConn *net.TCPConn, publicConnChan chan *net.TCPConn) {
 
 			for {
 				//阻塞等待对内应的响应（等待内应回消息），将前4位写入buf
-				_, err = io.ReadFull(serverConn, buf[:4])
-				if err != nil {
+				if _, err := io.ReadFull(serverConn, buf[:4]); err != nil {
 					log.Println(err)
 					_ = serverConn.Close()
 					//重新放回到通道里
@@ -108,7 +107,7 @@ func authConn(serverConn *net.TCPConn, publicConnChan chan *net.TCPConn) {
 					return
 				}
 				//如果对内应的端口返回acpt，停止阻塞
-				if bytes.Equal(buf[:4], []byte("ACPT")) {
+				if bytes.Equal(buf[:4], common.ACPT) {
 					break
 				}
 			}
@@ -119,8 +118,7 @@ func authConn(serverConn *net.TCPConn, publicConnChan chan *net.TCPConn) {
 			return
 		//定时检测是否是在线
 		case <-time.After(60 * time.Second):
-			_, err := serverConn.Write([]byte("PING"))
-			if err != nil {
+			if _, err := serverConn.Write(common.PING); err != nil {
 				log.Println(err)
 				_ = serverConn.Close()
 				return
@@ -129,8 +127,7 @@ func authConn(serverConn *net.TCPConn, publicConnChan chan *net.TCPConn) {
 			for {
 				_ = serverConn.SetReadDeadline(time.Now().Add(90 * time.Second))
 				//等待读取
-				_, err = io.ReadFull(serverConn, buf[:4])
-				if err != nil {
+				if _, err := io.ReadFull(serverConn, buf[:4]); err != nil {
 					log.Println(err)
 					_ = serverConn.Close()
 					return
@@ -138,7 +135,7 @@ func authConn(serverConn *net.TCPConn, publicConnChan chan *net.TCPConn) {
 				//去掉超时
 				_ = serverConn.SetReadDeadline(time.Time{})
 				//回应了pang
-				if bytes.Equal(buf[:4], []byte("PONG")) {
+				if bytes.Equal(buf[:4], common.PONG) {
 					break
 				}
 			}

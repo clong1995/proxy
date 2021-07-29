@@ -1,3 +1,3 @@
-module ferry
+module proxy
 
 go 1.12
